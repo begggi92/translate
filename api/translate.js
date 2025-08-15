@@ -1,57 +1,52 @@
-// api/translate.js
+import fs from "fs";
+import path from "path";
+import fetch from "node-fetch";
+
+const CACHE_FILE = path.join(process.cwd(), "translations.json");
+let cache = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE)) : {};
+
 export default async function handler(req, res) {
-  // ⚠️ Разрешаем запросы только с твоего сайта
-  const allowedOrigin = "https://sprightly-choux-7031ef.netlify.app";
-  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  // Preflight-запрос
-  if (req.method === "OPTIONS") return res.status(200).end();
-
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({ error: "Only POST allowed" });
   }
 
   try {
-    const { texts, targetLang = "ky", sourceLang = "auto" } = req.body || {};
-    if (!Array.isArray(texts) || texts.length === 0) {
-      return res.status(400).json({ error: "Body must be { texts: string[] }" });
+    const { text, lang } = req.body;
+    if (!text || !lang) {
+      return res.status(400).json({ error: "Text and lang are required" });
     }
 
-    const systemPrompt = `
-You are a professional translator. Translate each input string to ${
-      targetLang === "ky" ? "Kyrgyz" : targetLang
-    }. Return ONLY JSON with a key "translations" as an array in the same order as input.
-Keep numbers, URLs, email addresses, and placeholders like {name}, {{token}}, %s unchanged.`;
+    // проверка кэша
+    if (cache[text + lang]) {
+      return res.json({ translated: cache[text + lang] });
+    }
 
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    // запрос в OpenAI
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        temperature: 0.2,
         messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: JSON.stringify({ sourceLang, targetLang, texts }) },
-        ],
-      }),
+          { role: "system", content: `Переведи текст на ${lang}, сохраняя смысл.` },
+          { role: "user", content: text }
+        ]
+      })
     });
 
-    const data = await r.json();
-    const parsed = JSON.parse(data?.choices?.[0]?.message?.content || "{}");
-    const translations = parsed?.translations;
+    const data = await response.json();
+    const translated = data.choices[0].message.content.trim();
 
-    if (!Array.isArray(translations) || translations.length !== texts.length) {
-      return res.status(500).json({ error: "Bad translation format", raw: data });
-    }
+    // сохраняем в кэш
+    cache[text + lang] = translated;
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
 
-    return res.status(200).json({ translations });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Server error" });
+    res.json({ translated });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Ошибка перевода" });
   }
 }
