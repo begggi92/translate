@@ -1,30 +1,68 @@
-import OpenAI from "openai";
+import fs from "fs";
+import path from "path";
+import fetch from "node-fetch";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+const CACHE_FILE = path.join(process.cwd(), "translations.json");
+let cache = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE)) : {};
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  const allowedOrigin = "https://sprightly-choux-7031ef.netlify.app";
+  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  const { text, lang } = req.body;
-  if (!text || !lang) return res.status(400).json({ error: "Missing text or lang" });
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Only POST allowed" });
+  }
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: `Переведи следующий текст на язык ${lang}: ${text}`
-        }
-      ]
+    // Правильный парсинг тела запроса
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    const { text, lang } = body;
+
+    if (!text || !lang) {
+      return res.status(400).json({ error: "Text and lang are required" });
+    }
+
+    const cacheKey = text + "|" + lang;
+    if (cache[cacheKey]) {
+      return res.json({ translated: cache[cacheKey] });
+    }
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: `Переведи текст на ${lang}, сохраняя смысл.` },
+          { role: "user", content: text }
+        ]
+      })
     });
 
-    const translated = response.choices[0].message.content;
-    res.status(200).json({ translated });
+    const data = await response.json();
+
+    if (!data.choices || !data.choices[0]?.message?.content) {
+      console.error("Ошибка ответа OpenAI:", data);
+      return res.status(500).json({ error: "Invalid OpenAI response" });
+    }
+
+    const translated = data.choices[0].message.content.trim();
+
+    cache[cacheKey] = translated;
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
+
+    res.json({ translated });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Translation failed" });
+    res.status(500).json({ error: "Ошибка перевода" });
   }
 }
