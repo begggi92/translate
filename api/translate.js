@@ -1,6 +1,8 @@
+// api/translate.js
 export default async function handler(req, res) {
-  // ⚠️ CORS
-  res.setHeader("Access-Control-Allow-Origin", "https://sprightly-choux-7031ef.netlify.app"); // твой сайт
+  // ⚠️ Разрешаем запросы только с твоего сайта
+  const allowedOrigin = "https://sprightly-choux-7031ef.netlify.app";
+  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
@@ -11,14 +13,12 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // --- твой код перевода ---
   try {
     const { texts, targetLang = "ky", sourceLang = "auto" } = req.body || {};
     if (!Array.isArray(texts) || texts.length === 0) {
       return res.status(400).json({ error: "Body must be { texts: string[] }" });
     }
 
-    // вызов OpenAI
     const systemPrompt = `
 You are a professional translator. Translate each input string to ${
       targetLang === "ky" ? "Kyrgyz" : targetLang
@@ -44,6 +44,10 @@ Keep numbers, URLs, email addresses, and placeholders like {name}, {{token}}, %s
     const data = await r.json();
     const parsed = JSON.parse(data?.choices?.[0]?.message?.content || "{}");
     const translations = parsed?.translations;
+
+    if (!Array.isArray(translations) || translations.length !== texts.length) {
+      return res.status(500).json({ error: "Bad translation format", raw: data });
+    }
 
     return res.status(200).json({ translations });
   } catch (err) {
