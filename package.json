@@ -1,0 +1,6 @@
+{
+  "name": "ky-site-translator",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" }
+}
